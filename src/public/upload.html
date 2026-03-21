@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure File Upload</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 640px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #1a1a2e;
+      margin-bottom: 4px;
+    }
+    .client-label {
+      font-size: 0.95rem;
+      color: #6b7280;
+      margin-bottom: 24px;
+    }
+    .dropzone {
+      border: 2px dashed #cbd5e1;
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: #fff;
+      margin-bottom: 16px;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    .dropzone-icon {
+      font-size: 2.5rem;
+      margin-bottom: 12px;
+      color: #94a3b8;
+    }
+    .dropzone-text {
+      font-size: 1rem;
+      color: #64748b;
+    }
+    .dropzone-text strong {
+      color: #3b82f6;
+    }
+    .file-list {
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .file-item:last-child { border-bottom: none; }
+    .file-name {
+      font-size: 0.9rem;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 70%;
+    }
+    .file-size {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    .file-remove {
+      background: none;
+      border: none;
+      color: #ef4444;
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: 0 4px;
+      margin-left: 8px;
+    }
+    .upload-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .upload-btn:hover { background: #2563eb; }
+    .upload-btn:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+    .progress-container {
+      margin-top: 16px;
+      display: none;
+    }
+    .progress-bar-track {
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #3b82f6;
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+    .progress-text {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-top: 6px;
+      text-align: center;
+    }
+    .error-msg {
+      color: #ef4444;
+      font-size: 0.9rem;
+      margin-top: 12px;
+      text-align: center;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Secure File Upload</h1>
+    <div class="client-label" id="clientLabel"></div>
+
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-icon">&#128193;</div>
+      <div class="dropzone-text">Drop files here or <strong>click to browse</strong></div>
+    </div>
+
+    <input type="file" id="fileInput" multiple hidden>
+
+    <div class="file-list" id="fileList"></div>
+
+    <button class="upload-btn" id="uploadBtn" disabled>Select files to upload</button>
+
+    <div class="progress-container" id="progressContainer">
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-text" id="progressText">Uploading...</div>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+
+  <script>
+    const token = window.location.pathname.split('/u/')[1];
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const errorMsg = document.getElementById('errorMsg');
+
+    let selectedFiles = [];
+
+    // Load token info
+    fetch(`/api/token-info/${token}`)
+      .then(r => {
+        if (!r.ok) { window.location.href = '/expired.html'; return; }
+        return r.json();
+      })
+      .then(data => {
+        if (data) document.getElementById('clientLabel').textContent = `For: ${data.label}`;
+      });
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function renderFiles() {
+      fileList.innerHTML = '';
+      selectedFiles.forEach((f, i) => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = `
+          <span class="file-name">${f.name}</span>
+          <span>
+            <span class="file-size">${formatSize(f.size)}</span>
+            <button class="file-remove" data-idx="${i}">&times;</button>
+          </span>`;
+        fileList.appendChild(div);
+      });
+
+      if (selectedFiles.length > 0) {
+        const total = selectedFiles.reduce((s, f) => s + f.size, 0);
+        uploadBtn.textContent = `Upload ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} (${formatSize(total)})`;
+        uploadBtn.disabled = false;
+      } else {
+        uploadBtn.textContent = 'Select files to upload';
+        uploadBtn.disabled = true;
+      }
+    }
+
+    function addFiles(files) {
+      for (const f of files) {
+        if (!selectedFiles.some(s => s.name === f.name && s.size === f.size)) {
+          selectedFiles.push(f);
+        }
+      }
+      renderFiles();
+    }
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      addFiles(fileInput.files);
+      fileInput.value = '';
+    });
+
+    dropzone.addEventListener('dragover', e => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      addFiles(e.dataTransfer.files);
+    });
+
+    fileList.addEventListener('click', e => {
+      if (e.target.classList.contains('file-remove')) {
+        selectedFiles.splice(parseInt(e.target.dataset.idx), 1);
+        renderFiles();
+      }
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+      if (selectedFiles.length === 0) return;
+
+      errorMsg.style.display = 'none';
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading...';
+      progressContainer.style.display = 'block';
+      dropzone.style.display = 'none';
+
+      const formData = new FormData();
+      selectedFiles.forEach(f => formData.append('files', f));
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/upload/${token}`);
+
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          progressFill.style.width = pct + '%';
+          progressText.textContent = `Uploading... ${pct}% (${formatSize(e.loaded)} / ${formatSize(e.total)})`;
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          window.location.href = '/done';
+        } else {
+          let msg = 'Upload failed';
+          try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+          errorMsg.textContent = msg;
+          errorMsg.style.display = 'block';
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Retry Upload';
+          dropzone.style.display = '';
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        errorMsg.textContent = 'Network error. Please try again.';
+        errorMsg.style.display = 'block';
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Retry Upload';
+        dropzone.style.display = '';
+      });
+
+      xhr.send(formData);
+    });
+  </script>
+</body>
+</html>
