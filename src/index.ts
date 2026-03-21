@@ -10,6 +10,7 @@ import adminUIRoutes from "./routes/adminUI";
 const app = express();
 const port = parseInt(process.env.PORT || "3000", 10);
 
+app.set("trust proxy", 1); // trust Traefik
 app.use(express.json());
 
 // Session

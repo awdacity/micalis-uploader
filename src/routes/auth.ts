@@ -38,7 +38,7 @@ router.get(
   (req, res) => {
     const user = req.user as any;
     if (user?.username === ALLOWED_USER) {
-      res.redirect("/admin");
+      req.session.save(() => res.redirect("/admin"));
     } else {
       req.logout(() => {
         res.status(403).send("Access denied. Only authorized users can access admin.");
