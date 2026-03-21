@@ -176,7 +176,7 @@
           const files = JSON.parse(t.files_uploaded || '[]');
           if (files.length) filesHtml = '<div class="token-files">'+files.map(f => `<span class="token-file-item">${esc(f.name)} ${fmtSize(f.size)}</span>`).join('')+'</div>';
         } catch(e) {}
-        const s3Url = `https://console.scaleway.com/object-storage/buckets/fr-par/micalis/content?prefix=uploads%2F${t.token}%2F`;
+        const s3Url = `https://console.scaleway.com/object-storage/buckets/fr-par/micalis/files/uploads/${t.token}/`;
         const s3Btn = t.status === 'used' ? `<a href="${s3Url}" target="_blank" class="token-link-btn" style="text-decoration:none;background:#7c3aed;display:inline-block">☁️ S3</a> ` : '';
         const linkBtn = t.url ? `<button class="token-link-btn" onclick="copyToClip('${t.url}')">Copy link</button>` : '';
         return `<div class="token-item">
