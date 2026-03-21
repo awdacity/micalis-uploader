@@ -1,5 +1,6 @@
-import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 
 const s3 = new S3Client({
@@ -41,6 +42,11 @@ export async function uploadToS3(
   });
 
   await upload.done();
+}
+
+export async function getPresignedPutUrl(key: string, contentType: string, expiresIn = 7200): Promise<string> {
+  const cmd = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
+  return getSignedUrl(s3, cmd, { expiresIn });
 }
 
 export async function listUploads(): Promise<{ key: string; size: number; lastModified: Date }[]> {

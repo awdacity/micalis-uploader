@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import Busboy from "busboy";
 import path from "path";
 import { getToken, isTokenValid, markTokenUsed } from "../db";
-import { uploadToS3 } from "../s3";
+import { uploadToS3, getPresignedPutUrl } from "../s3";
 import { notifyUpload } from "../telegram";
 
 const router = Router();
@@ -92,6 +92,45 @@ router.post("/api/upload/:token", (req: Request, res: Response) => {
   });
 
   req.pipe(busboy);
+});
+
+// Generate presigned PUT URLs — browser uploads directly to S3
+router.post("/api/prepare-upload/:token", async (req: Request, res: Response) => {
+  const t = req.params.token as string;
+  const row = getToken(t);
+  if (!row || !isTokenValid(row)) {
+    res.status(403).json({ error: "Token expired or invalid" });
+    return;
+  }
+  const { files } = req.body as { files: { name: string; type: string; size: number }[] };
+  if (!files?.length) {
+    res.status(400).json({ error: "files required" });
+    return;
+  }
+  const urls = await Promise.all(files.map(async (f) => {
+    const key = `uploads/${t}/${f.name}`;
+    const url = await getPresignedPutUrl(key, f.type || "application/octet-stream");
+    return { name: f.name, size: f.size, key, url };
+  }));
+  res.json({ uploads: urls });
+});
+
+// Called by browser after direct S3 upload completes
+router.post("/api/complete-upload/:token", async (req: Request, res: Response) => {
+  const t = req.params.token as string;
+  const row = getToken(t);
+  if (!row || !isTokenValid(row)) {
+    res.status(403).json({ error: "Token expired or invalid" });
+    return;
+  }
+  const { files } = req.body as { files: { name: string; size: number }[] };
+  if (!files?.length) {
+    res.status(400).json({ error: "files required" });
+    return;
+  }
+  markTokenUsed(t, files);
+  await notifyUpload(row.label, t, files);
+  res.json({ ok: true });
 });
 
 export default router;
