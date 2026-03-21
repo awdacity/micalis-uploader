@@ -10,6 +10,7 @@ const s3 = new S3Client({
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || "",
   },
   forcePathStyle: true,
+  maxAttempts: 6, // retry up to 6 times on S3 errors
 });
 
 const bucket = process.env.S3_BUCKET || "Micalis";
@@ -28,8 +29,8 @@ export async function uploadToS3(
       Body: body,
       ContentType: contentType,
     },
-    queueSize: 4,
-    partSize: 64 * 1024 * 1024, // 64 MB parts
+    queueSize: 2,
+    partSize: 16 * 1024 * 1024, // 16 MB parts — smaller = fewer bytes lost on retry
     leavePartsOnError: false,
   });
 
