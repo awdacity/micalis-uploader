@@ -294,32 +294,52 @@
 
       uploadBtn.textContent = 'Uploading...';
 
-      try {
-        await Promise.all(uploads.map((u, i) => new Promise((resolve, reject) => {
-          const file = selectedFiles.find(f => f.name === u.name);
+      function putToS3(u, file, idx, attempt = 1) {
+        return new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open('PUT', u.url);
           xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
           xhr.upload.addEventListener('progress', e => {
             if (e.lengthComputable) {
-              loadedMap[i] = e.loaded;
+              loadedMap[idx] = e.loaded;
               const totalLoaded = Object.values(loadedMap).reduce((a, b) => a + b, 0);
               const pct = Math.round((totalLoaded / totalBytes) * 100);
               progressFill.style.width = pct + '%';
               progressText.textContent = `Uploading... ${pct}% (${formatSize(totalLoaded)} / ${formatSize(totalBytes)})`;
             }
           });
-
           xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error(`S3 upload failed: ${xhr.status}`));
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else if (xhr.status >= 500 && attempt < 5) {
+              // Scaleway transient 500 — wait and retry
+              progressText.textContent = `S3 hiccup, retrying (${attempt}/5)...`;
+              loadedMap[idx] = 0;
+              setTimeout(() => putToS3(u, file, idx, attempt + 1).then(resolve).catch(reject), 2000 * attempt);
+            } else {
+              reject(new Error(`S3 error ${xhr.status} after ${attempt} attempts`));
+            }
           });
-          xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+          xhr.addEventListener('error', () => {
+            if (attempt < 5) {
+              progressText.textContent = `Network error, retrying (${attempt}/5)...`;
+              loadedMap[idx] = 0;
+              setTimeout(() => putToS3(u, file, idx, attempt + 1).then(resolve).catch(reject), 2000 * attempt);
+            } else {
+              reject(new Error('Network error after 5 retries'));
+            }
+          });
           xhr.send(file);
-        })));
+        });
+      }
+
+      try {
+        await Promise.all(uploads.map((u, i) => {
+          const file = selectedFiles.find(f => f.name === u.name);
+          return putToS3(u, file, i);
+        }));
       } catch (e) {
-        showError(e.message + ' — please retry.');
+        showError(e.message);
         return;
       }
 
