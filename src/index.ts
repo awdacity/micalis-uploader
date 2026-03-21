@@ -1,17 +1,40 @@
 import express from "express";
 import path from "path";
+import session from "express-session";
+import passport from "passport";
 import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/upload";
+import authRoutes from "./routes/auth";
+import adminUIRoutes from "./routes/adminUI";
 
 const app = express();
 const port = parseInt(process.env.PORT || "3000", 10);
 
 app.use(express.json());
 
+// Session
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "dev-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
+  })
+);
+
+// Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Static pages
 app.use(express.static(path.join(__dirname, "public")));
 
 // Routes
+app.use("/auth", authRoutes);
+app.use("/admin", adminUIRoutes);
 app.use("/api/admin", adminRoutes);
 app.use(uploadRoutes);
 
