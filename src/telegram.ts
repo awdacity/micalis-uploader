@@ -19,16 +19,18 @@ export async function notifyUpload(
     return;
   }
 
-  const filenames = files.map((f) => f.name).join("\n  ");
+  const filenames = files.map((f) => `  • ${f.name} (${formatSize(f.size)})`).join("\n");
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+  const s3Url = `https://console.scaleway.com/object-storage/buckets/fr-par/micalis/content?prefix=uploads%2F${token}%2F`;
 
   const text = `🆕 Upload complete!
 
-Client: ${label}
-Files:
-  ${filenames}
-Total size: ${formatSize(totalSize)}
-Token: ${token}`;
+👤 Client: ${label}
+📦 Files:
+${filenames}
+💾 Total: ${formatSize(totalSize)}
+
+🔗 View files: ${s3Url}`;
 
   try {
     const res = await fetch(
