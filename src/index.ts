@@ -20,7 +20,8 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === "production",
+      secure: false, // Traefik terminates SSL, app runs HTTP internally
+      sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   })
