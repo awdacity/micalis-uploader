@@ -20,6 +20,11 @@ app.get("/done", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "done.html"));
 });
 
+// Root — redirect to expired (no direct access)
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "expired.html"));
+});
+
 app.listen(port, () => {
   console.log(`Micalis Uploader running on port ${port}`);
 });
