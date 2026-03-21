@@ -91,19 +91,43 @@
         container.innerHTML = '<div class="empty">No tokens yet</div>';
         return;
       }
-      let html = '<table><thead><tr><th>Label</th><th>Created</th><th>Status</th><th>URL</th></tr></thead><tbody>';
+      let html = '<table><thead><tr><th>Client</th><th>Created</th><th>Status</th><th>Files uploaded</th><th>Link</th></tr></thead><tbody>';
       for (const t of tokens) {
         const badgeClass = t.status === 'active' ? 'badge-active' : t.status === 'used' ? 'badge-used' : 'badge-expired';
-        const urlCell = t.url ? `<span class="url-cell">${t.url}</span>` : '—';
+        
+        // Parse uploaded files
+        let filesHtml = '—';
+        try {
+          const files = JSON.parse(t.files_uploaded || '[]');
+          if (files.length > 0) {
+            filesHtml = files.map(f => {
+              const size = f.size > 1024*1024 ? (f.size/1024/1024).toFixed(1)+' MB'
+                         : f.size > 1024 ? (f.size/1024).toFixed(1)+' KB'
+                         : f.size+' B';
+              return `<div>${esc(f.name)} <span style="color:#999">(${size})</span></div>`;
+            }).join('');
+          }
+        } catch(e) {}
+
+        // URL cell — copy button for active tokens
+        const urlCell = t.url
+          ? `<button onclick="copyToClip('${t.url}')" style="padding:0.25rem 0.6rem;font-size:0.75rem;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;">Copy link</button>`
+          : '—';
+
         html += `<tr>
-          <td>${esc(t.label)}</td>
-          <td>${t.created_at}</td>
+          <td><strong>${esc(t.label)}</strong></td>
+          <td style="white-space:nowrap">${t.created_at.replace('T',' ').slice(0,16)}</td>
           <td><span class="badge ${badgeClass}">${t.status}</span></td>
+          <td>${filesHtml}</td>
           <td>${urlCell}</td>
         </tr>`;
       }
       html += '</tbody></table>';
       container.innerHTML = html;
+    }
+
+    function copyToClip(text) {
+      navigator.clipboard.writeText(text).then(() => alert('Link copied!'));
     }
 
     function esc(s) {
