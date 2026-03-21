@@ -4,5 +4,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - /data/micalis:/data
+      - micalis-data:/data
     restart: unless-stopped
+
+volumes:
+  micalis-data:
+    external: true
