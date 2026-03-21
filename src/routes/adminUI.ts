@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { createToken, listTokens } from "../db";
+import { listUploads } from "../s3";
 
 const router = Router();
 
@@ -44,6 +45,15 @@ router.get("/tokens", requireGitHubUser, (_req: Request, res: Response) => {
     status: t.used_at ? "used" : t.invalidated_at ? "expired" : "active",
   }));
   res.json(enriched);
+});
+
+router.get("/uploads", requireGitHubUser, async (_req: Request, res: Response) => {
+  try {
+    const files = await listUploads();
+    res.json(files);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;

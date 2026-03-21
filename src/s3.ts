@@ -1,4 +1,4 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Readable } from "stream";
 
@@ -40,6 +40,16 @@ export async function uploadToS3(
   });
 
   await upload.done();
+}
+
+export async function listUploads(): Promise<{ key: string; size: number; lastModified: Date }[]> {
+  const cmd = new ListObjectsV2Command({ Bucket: bucket, Prefix: "uploads/" });
+  const res = await s3.send(cmd);
+  return (res.Contents || []).map((o) => ({
+    key: o.Key || "",
+    size: o.Size || 0,
+    lastModified: o.LastModified || new Date(),
+  }));
 }
 
 export default s3;
