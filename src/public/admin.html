@@ -46,7 +46,21 @@
     .token-meta { font-size: 0.8rem; color: #888; margin-bottom: 0.4rem; }
     .token-files { font-size: 0.82rem; color: #555; margin-bottom: 0.4rem; }
     .token-file-item { display: inline-block; background: #f3f4f6; border-radius: 4px; padding: 0.15rem 0.4rem; margin: 0.1rem 0.1rem 0 0; }
-    .token-link-btn { font-size: 0.8rem; padding: 0.3rem 0.65rem; background: #3b82f6; color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+    .token-link-btn { font-size: 0.8rem; padding: 0.3rem 0.65rem; background: #3b82f6; color: #fff; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; margin-right: 0.35rem; }
+    .token-link-btn.preview { background: #06b6d4; }
+
+    /* Modal */
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
+    .modal.active { display: flex; }
+    .modal-content { background: #fff; border-radius: 12px; padding: 1.5rem; max-width: 400px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    .modal-header h3 { font-size: 1rem; font-weight: 600; }
+    .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #999; }
+    .file-list { list-style: none; }
+    .file-item { padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; cursor: pointer; transition: all 0.15s; }
+    .file-item:hover { background: #f0fdf4; border-color: #06b6d4; }
+    .file-item a { display: block; color: #0891b2; text-decoration: none; font-weight: 500; }
+    .file-item-size { display: block; font-size: 0.75rem; color: #999; margin-top: 0.2rem; }
 
     /* S3 Uploads */
     .upload-item { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid #f3f4f6; font-size: 0.85rem; }
@@ -73,6 +87,17 @@
     <div class="topbar-right">
       <span>@aaristov</span>
       <a class="logout" href="/auth/logout">Logout</a>
+    </div>
+  </div>
+
+  <!-- Preview Modal -->
+  <div id="preview-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Preview Files</h3>
+        <button class="modal-close" onclick="closePreviewModal()">✕</button>
+      </div>
+      <ul class="file-list" id="preview-file-list"></ul>
     </div>
   </div>
 
@@ -112,6 +137,9 @@
   </div>
 
   <script>
+    const VIEWABLE_EXTS = ['.czi', '.tif', '.tiff', '.ndpi', '.mrxs'];
+    const HV_API_URL = window.location.origin + '/api/internal/preview';
+
     function fmtSize(b) {
       if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
       if (b >= 1048576) return (b/1048576).toFixed(1)+' MB';
@@ -122,6 +150,40 @@
       return new Date(s).toLocaleString('fr-FR', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function openPreviewModal(token, label, files_str) {
+      try {
+        const files = JSON.parse(files_str || '[]');
+        const viewableFiles = files.filter(f => VIEWABLE_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
+        
+        if (!viewableFiles.length) {
+          alert('No previewable files for this token');
+          return;
+        }
+
+        // Build file list with direct links to histoview (they open the HV interface with that file)
+        const fileListHtml = viewableFiles.map(f => {
+          const s3Path = `s3://micalis/uploads/${token}/${f.name}`;
+          return `<li class="file-item">
+            <a href="/preview/${token}/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a>
+            <span class="file-item-size">${fmtSize(f.size)}</span>
+          </li>`;
+        }).join('');
+
+        document.getElementById('preview-file-list').innerHTML = fileListHtml;
+        document.getElementById('preview-modal').classList.add('active');
+      } catch(e) {
+        alert('Error loading files');
+      }
+    }
+
+    function closePreviewModal() {
+      document.getElementById('preview-modal').classList.remove('active');
+    }
+
+    document.getElementById('preview-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'preview-modal') closePreviewModal();
+    });
 
     function switchTab(tab, el) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -177,8 +239,10 @@
           if (files.length) filesHtml = '<div class="token-files">'+files.map(f => `<span class="token-file-item">${esc(f.name)} ${fmtSize(f.size)}</span>`).join('')+'</div>';
         } catch(e) {}
         const s3Url = `https://console.scaleway.com/object-storage/buckets/fr-par/micalis/files/uploads/${t.token}/`;
-        const s3Btn = t.status === 'used' ? `<a href="${s3Url}" target="_blank" class="token-link-btn" style="text-decoration:none;background:#7c3aed;display:inline-block">☁️ S3</a> ` : '';
+        const s3Btn = t.status === 'used' ? `<a href="${s3Url}" target="_blank" class="token-link-btn" style="background:#7c3aed">☁️ S3</a>` : '';
+        const previewBtn = t.status === 'used' ? `<button class="token-link-btn preview" onclick="openPreviewModal('${t.token}', '${esc(t.label)}', '${t.files_uploaded.replace(/'/g, "\\'")}')">👁 Preview</button>` : '';
         const linkBtn = t.url ? `<button class="token-link-btn" onclick="copyToClip('${t.url}')">Copy link</button>` : '';
+        const btnGroup = [previewBtn, s3Btn, linkBtn].filter(Boolean).join('');
         return `<div class="token-item">
           <div class="token-header">
             <span class="token-label">${esc(t.label)}</span>
@@ -186,7 +250,7 @@
           </div>
           <div class="token-meta">${fmtDate(t.created_at)}</div>
           ${filesHtml}
-          ${s3Btn}${linkBtn}
+          <div>${btnGroup}</div>
         </div>`;
       }).join('');
     }

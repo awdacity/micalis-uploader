@@ -115,6 +115,52 @@ router.post("/api/prepare-upload/:token", async (req: Request, res: Response) =>
   res.json({ uploads: urls });
 });
 
+// Generate preview link for a specific file
+router.get("/preview/:token/:filename", async (req: Request, res: Response) => {
+  const t = req.params.token as string;
+  const filename = decodeURIComponent(req.params.filename as string);
+  const row = getToken(t);
+  
+  if (!row || row.used_at === null) {
+    res.status(403).json({ error: "Token not found or not used" });
+    return;
+  }
+
+  const hvApiUrl = process.env.HV_URL ? `${process.env.HV_URL}/api/internal/preview` : null;
+  const hvSecret = process.env.HV_INTERNAL_SECRET;
+
+  if (!hvApiUrl || !hvSecret) {
+    res.status(500).json({ error: "Preview service not configured" });
+    return;
+  }
+
+  try {
+    const hvRes = await fetch(hvApiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": hvSecret
+      },
+      body: JSON.stringify({
+        label: row.label,
+        file_paths: [`s3://micalis/uploads/${t}/${filename}`]
+      })
+    });
+
+    if (!hvRes.ok) {
+      console.error("Histoview API error:", await hvRes.text());
+      res.status(500).json({ error: "Failed to generate preview" });
+      return;
+    }
+
+    const data = await hvRes.json() as { url: string };
+    res.redirect(data.url);
+  } catch (err) {
+    console.error("Preview generation error:", err);
+    res.status(500).json({ error: "Preview generation failed" });
+  }
+});
+
 // Called by browser after direct S3 upload completes
 router.post("/api/complete-upload/:token", async (req: Request, res: Response) => {
   const t = req.params.token as string;
@@ -128,9 +174,44 @@ router.post("/api/complete-upload/:token", async (req: Request, res: Response) =
     res.status(400).json({ error: "files required" });
     return;
   }
-  markTokenUsed(t, files);
-  await notifyUpload(row.label, t, files);
-  res.json({ ok: true });
+
+  let hvUrl: string | undefined;
+  const hvApiUrl = process.env.HV_URL ? `${process.env.HV_URL}/api/internal/preview` : null;
+  const hvSecret = process.env.HV_INTERNAL_SECRET;
+
+  if (hvApiUrl && hvSecret) {
+    try {
+      // Check if any of the files are viewable (e.g. .czi, .tif, .ndpi)
+      const viewableExts = [".czi", ".tif", ".tiff", ".ndpi", ".mrxs"];
+      const viewableFiles = files.filter(f => viewableExts.some(ext => f.name.toLowerCase().endsWith(ext)));
+
+      if (viewableFiles.length > 0) {
+        const hvRes = await fetch(hvApiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Secret": hvSecret
+          },
+          body: JSON.stringify({
+            label: row.label,
+            file_paths: viewableFiles.map(f => `s3://micalis/uploads/${t}/${f.name}`)
+          })
+        });
+        if (hvRes.ok) {
+          const data = await hvRes.json() as { url: string };
+          hvUrl = data.url;
+        } else {
+          console.error("Histoview API error:", await hvRes.text());
+        }
+      }
+    } catch (err) {
+      console.error("Failed to generate Histoview preview:", err);
+    }
+  }
+
+  markTokenUsed(t, files, hvUrl);
+  await notifyUpload(row.label, t, files, hvUrl);
+  res.json({ ok: true, hvUrl });
 });
 
 export default router;
