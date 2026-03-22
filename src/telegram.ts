@@ -12,7 +12,8 @@ function formatSize(bytes: number): string {
 export async function notifyUpload(
   label: string,
   token: string,
-  files: { name: string; size: number }[]
+  files: { name: string; size: number }[],
+  hvUrl?: string
 ): Promise<void> {
   if (!botToken || !chatId) {
     console.warn("Telegram not configured, skipping notification");
@@ -30,7 +31,7 @@ export async function notifyUpload(
 ${filenames}
 💾 Total: ${formatSize(totalSize)}
 
-🔗 View files: ${s3Url}`;
+☁️ S3: ${s3Url}${hvUrl ? `\n🔬 Preview: ${hvUrl}` : ""}`;
 
   try {
     const res = await fetch(
@@ -38,10 +39,7 @@ ${filenames}
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-        }),
+        body: JSON.stringify({ chat_id: chatId, text }),
       }
     );
     if (!res.ok) {

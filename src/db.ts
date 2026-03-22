@@ -18,9 +18,14 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     used_at TEXT,
     invalidated_at TEXT,
-    files_uploaded TEXT DEFAULT '[]'
+    files_uploaded TEXT DEFAULT '[]',
+    hv_url TEXT
   )
 `);
+
+try {
+  db.exec("ALTER TABLE tokens ADD COLUMN hv_url TEXT");
+} catch (e) {}
 
 export interface TokenRow {
   id: number;
@@ -30,6 +35,7 @@ export interface TokenRow {
   used_at: string | null;
   invalidated_at: string | null;
   files_uploaded: string;
+  hv_url: string | null;
 }
 
 export function createToken(token: string, label: string): TokenRow {
@@ -58,11 +64,12 @@ export function invalidateToken(token: string): void {
 
 export function markTokenUsed(
   token: string,
-  files: { name: string; size: number }[]
+  files: { name: string; size: number }[],
+  hvUrl?: string
 ): void {
   db.prepare(
-    "UPDATE tokens SET used_at = datetime('now'), invalidated_at = datetime('now'), files_uploaded = ? WHERE token = ?"
-  ).run(JSON.stringify(files), token);
+    "UPDATE tokens SET used_at = datetime('now'), invalidated_at = datetime('now'), files_uploaded = ?, hv_url = ? WHERE token = ?"
+  ).run(JSON.stringify(files), hvUrl || null, token);
 }
 
 export function isTokenValid(row: TokenRow): boolean {
