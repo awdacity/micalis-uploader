@@ -151,9 +151,10 @@
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-    function openPreviewModal(token, label, files_str) {
+    function openPreviewModal(btn) {
       try {
-        const files = JSON.parse(files_str || '[]');
+        const token = btn.dataset.token;
+        const files = JSON.parse(btn.dataset.files || '[]');
         const viewableFiles = files.filter(f => VIEWABLE_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
         
         if (!viewableFiles.length) {
@@ -173,7 +174,8 @@
         document.getElementById('preview-file-list').innerHTML = fileListHtml;
         document.getElementById('preview-modal').classList.add('active');
       } catch(e) {
-        alert('Error loading files');
+        console.error('Error loading files:', e);
+        alert('Error loading files: ' + e.message);
       }
     }
 
@@ -240,7 +242,7 @@
         } catch(e) {}
         const s3Url = `https://console.scaleway.com/object-storage/buckets/fr-par/micalis/files/uploads/${t.token}/`;
         const s3Btn = t.status === 'used' ? `<a href="${s3Url}" target="_blank" class="token-link-btn" style="background:#7c3aed">☁️ S3</a>` : '';
-        const previewBtn = t.status === 'used' ? `<button class="token-link-btn preview" onclick="openPreviewModal('${t.token}', '${esc(t.label)}', '${t.files_uploaded.replace(/'/g, "\\'")}')">👁 Preview</button>` : '';
+        const previewBtn = t.status === 'used' ? `<button class="token-link-btn preview" onclick="openPreviewModal(this)" data-token="${t.token}" data-files='${t.files_uploaded}'>👁 Preview</button>` : '';
         const linkBtn = t.url ? `<button class="token-link-btn" onclick="copyToClip('${t.url}')">Copy link</button>` : '';
         const btnGroup = [previewBtn, s3Btn, linkBtn].filter(Boolean).join('');
         return `<div class="token-item">
