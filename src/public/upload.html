@@ -25,7 +25,6 @@
     .dropzone-text { font-size: 1rem; color: #64748b; }
     .dropzone-text strong { color: #3b82f6; }
 
-    /* File list — selection mode */
     .file-list { background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
     .file-item {
       display: flex; align-items: center; justify-content: space-between;
@@ -36,7 +35,6 @@
     .file-size { font-size: 0.85rem; color: #94a3b8; white-space: nowrap; }
     .file-remove { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.1rem; padding: 0 4px; margin-left: 8px; }
 
-    /* Upload button */
     .upload-btn {
       width: 100%; padding: 14px; border: none; border-radius: 8px;
       background: #3b82f6; color: #fff; font-size: 1rem; font-weight: 600;
@@ -45,7 +43,6 @@
     .upload-btn:hover { background: #2563eb; }
     .upload-btn:disabled { background: #94a3b8; cursor: not-allowed; }
 
-    /* === Per-file progress rows === */
     .upload-progress-list { display: none; margin-bottom: 16px; border-radius: 10px; overflow: hidden; background: #fff; }
     .file-progress-row {
       position: relative; padding: 13px 16px; border-bottom: 1px solid #f1f5f9;
@@ -53,15 +50,14 @@
     }
     .file-progress-row:last-child { border-bottom: none; }
 
-    /* The fill bar sits behind the text */
     .fp-bar {
       position: absolute; inset: 0; width: 0%;
       background: #dbeafe; transition: width 0.25s ease, background 0.4s;
       pointer-events: none;
     }
     .fp-bar.done { background: #dcfce7; }
+    .fp-bar.error { background: #fee2e2; }
 
-    /* Text layer above bar */
     .fp-content {
       position: relative; display: flex; justify-content: space-between; align-items: center; gap: 8px;
     }
@@ -69,9 +65,9 @@
     .fp-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; }
     .fp-pct { font-size: 0.85rem; font-weight: 700; color: #3b82f6; }
     .fp-pct.done { color: #16a34a; }
+    .fp-pct.error { color: #ef4444; }
     .fp-detail { font-size: 0.75rem; color: #94a3b8; }
 
-    /* === Overall bar at bottom === */
     .overall-bar-wrap {
       display: none; position: fixed; bottom: 0; left: 0; right: 0;
       background: #fff; border-top: 1px solid #e5e7eb;
@@ -86,6 +82,12 @@
 
     .error-msg { color: #ef4444; font-size: 0.9rem; margin-top: 12px; text-align: center; display: none; }
     .bottom-spacer { height: 64px; }
+
+    .retry-info {
+      background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px;
+      padding: 12px 16px; margin-bottom: 16px; display: none;
+      font-size: 0.85rem; color: #92400e;
+    }
   </style>
 </head>
 <body>
@@ -101,15 +103,15 @@
 
     <div class="file-list" id="fileList"></div>
 
-    <!-- per-file upload rows (shown during upload) -->
     <div class="upload-progress-list" id="uploadProgressList"></div>
+
+    <div class="retry-info" id="retryInfo"></div>
 
     <button class="upload-btn" id="uploadBtn" disabled>Select files to upload</button>
     <div class="error-msg" id="errorMsg"></div>
     <div class="bottom-spacer"></div>
   </div>
 
-  <!-- sticky overall progress bar -->
   <div class="overall-bar-wrap" id="overallBarWrap">
     <div class="overall-top">
       <span class="overall-label" id="overallLabel">Uploading…</span>
@@ -121,12 +123,18 @@
   </div>
 
   <script>
+    // ── Config ──────────────────────────────────────────────────
+    const MAX_RETRIES = 20;
+    const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+    const CONCURRENT_PARTS = 3;
+
     const token = window.location.pathname.split('/u/')[1];
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('fileInput');
     const fileListEl = document.getElementById('fileList');
     const uploadBtn = document.getElementById('uploadBtn');
     const errorMsg = document.getElementById('errorMsg');
+    const retryInfo = document.getElementById('retryInfo');
     const uploadProgressList = document.getElementById('uploadProgressList');
     const overallBarWrap = document.getElementById('overallBarWrap');
     const overallFill = document.getElementById('overallFill');
@@ -134,11 +142,13 @@
     const overallStats = document.getElementById('overallStats');
 
     let selectedFiles = [];
+    let uploadStartTime = 0;
 
     fetch(`/api/token-info/${token}`)
       .then(r => { if (!r.ok) { window.location.href = '/expired.html'; return; } return r.json(); })
       .then(d => { if (d) document.getElementById('clientLabel').textContent = `For: ${d.label}`; });
 
+    // ── Formatting helpers ──────────────────────────────────────
     function fmt(b) {
       if (b >= 1073741824) return (b/1073741824).toFixed(2)+' GB';
       if (b >= 1048576) return (b/1048576).toFixed(1)+' MB';
@@ -157,13 +167,25 @@
       return Math.floor(sec/3600)+'h '+Math.floor((sec%3600)/60)+'m';
     }
 
+    // ── Server-side event logging ───────────────────────────────
+    function logEvent(event, data) {
+      fetch(`/api/log-event/${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, data })
+      }).catch(() => {}); // fire-and-forget
+    }
+
+    // ── File selection UI ───────────────────────────────────────
     function renderFiles() {
       fileListEl.innerHTML = '';
       selectedFiles.forEach((f, i) => {
         const div = document.createElement('div');
         div.className = 'file-item';
+        const isLarge = f.size >= MULTIPART_THRESHOLD;
+        const sizeLabel = isLarge ? `${fmt(f.size)} 🧩` : fmt(f.size);
         div.innerHTML = `<span class="file-name">${f.name}</span>
-          <span><span class="file-size">${fmt(f.size)}</span>
+          <span><span class="file-size">${sizeLabel}</span>
           <button class="file-remove" data-idx="${i}">&times;</button></span>`;
         fileListEl.appendChild(div);
       });
@@ -200,115 +222,355 @@
       dropzone.style.display = ''; overallBarWrap.style.display = 'none';
     }
 
+    // ── Progress tracking ───────────────────────────────────────
+    const loadedMap = {};
+    let totalBytes = 0;
+
+    function updateOverall() {
+      const totalLoaded = Object.values(loadedMap).reduce((a,b)=>a+b,0);
+      const pct = Math.round(totalLoaded/totalBytes*100);
+      overallFill.style.width = pct+'%';
+      const elapsed = (Date.now()-uploadStartTime)/1000;
+      const speed = elapsed > 0.5 ? totalLoaded/elapsed : 0;
+      const remaining = speed > 0 ? (totalBytes-totalLoaded)/speed : Infinity;
+      overallStats.textContent = speed > 0
+        ? `${fmt(totalLoaded)} / ${fmt(totalBytes)}  ·  ${fmtSpeed(speed)}  ·  ETA ${fmtEta(remaining)}`
+        : `${fmt(totalLoaded)} / ${fmt(totalBytes)}`;
+    }
+
+    function setFileProgress(idx, pct, text) {
+      const bar = document.getElementById('fpbar-'+idx);
+      const pctEl = document.getElementById('fppct-'+idx);
+      if (bar) bar.style.width = pct+'%';
+      if (pctEl) pctEl.textContent = text;
+    }
+
+    function setFileDetail(idx, text) {
+      const el = document.getElementById('fpdetail-'+idx);
+      if (el) el.textContent = text;
+    }
+
+    function markFileDone(idx, size) {
+      const bar = document.getElementById('fpbar-'+idx);
+      const pctEl = document.getElementById('fppct-'+idx);
+      if (bar) { bar.style.width = '100%'; bar.classList.add('done'); }
+      if (pctEl) { pctEl.textContent = '✓ Done'; pctEl.classList.add('done'); }
+      setFileDetail(idx, fmt(size));
+    }
+
+    function markFileError(idx, msg) {
+      const bar = document.getElementById('fpbar-'+idx);
+      const pctEl = document.getElementById('fppct-'+idx);
+      if (bar) bar.classList.add('error');
+      if (pctEl) { pctEl.textContent = '✗ Failed'; pctEl.classList.add('error'); }
+      setFileDetail(idx, msg);
+    }
+
+    // ── Retry backoff ───────────────────────────────────────────
+    function retryDelay(attempt) {
+      // Exponential backoff with jitter, capped at 60s
+      return Math.min(60000, 2000 * Math.pow(1.5, attempt) + Math.random() * 2000);
+    }
+
+    function showRetryInfo(fileName, attempt, delay) {
+      retryInfo.style.display = 'block';
+      retryInfo.textContent = `⏳ Retrying ${fileName} (attempt ${attempt}/${MAX_RETRIES}) in ${Math.ceil(delay/1000)}s…`;
+    }
+
+    function hideRetryInfo() {
+      retryInfo.style.display = 'none';
+    }
+
+    // ── Direct PUT upload (small files < 100MB) ─────────────────
+    function putToS3(u, file, idx, attempt) {
+      attempt = attempt || 1;
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', u.url);
+        xhr.setRequestHeader('Content-Type', file.type||'application/octet-stream');
+        xhr.timeout = 600000; // 10 min timeout
+
+        xhr.upload.addEventListener('progress', e => {
+          if (!e.lengthComputable) return;
+          loadedMap[idx] = e.loaded;
+          const pct = Math.round(e.loaded/file.size*100);
+          setFileProgress(idx, pct, pct+'%');
+          const elapsed = (Date.now()-uploadStartTime)/1000;
+          const tl = Object.values(loadedMap).reduce((a,b)=>a+b,0);
+          const speed = elapsed > 0.5 ? tl/elapsed : 0;
+          const fileRemaining = speed > 0 ? (file.size-e.loaded)/speed : null;
+          setFileDetail(idx, fmt(e.loaded)+' / '+fmt(file.size)+(fileRemaining!==null ? '  ·  '+fmtEta(fileRemaining) : ''));
+          updateOverall();
+
+          // Log progress milestones to server
+          if (pct % 10 === 0 && pct > 0) {
+            logEvent('progress', { fileName: file.name, pct, loaded: e.loaded, total: file.size });
+          }
+        });
+
+        xhr.addEventListener('load', () => {
+          hideRetryInfo();
+          if (xhr.status >= 200 && xhr.status < 300) {
+            loadedMap[idx] = file.size;
+            markFileDone(idx, file.size);
+            updateOverall();
+            resolve();
+          } else if (attempt < MAX_RETRIES) {
+            const err = `S3 HTTP ${xhr.status}`;
+            const delay = retryDelay(attempt);
+            logEvent('retry', { fileName: file.name, attempt, maxRetries: MAX_RETRIES, error: err, loaded: loadedMap[idx]||0, total: file.size });
+            showRetryInfo(file.name, attempt, delay);
+            loadedMap[idx] = 0;
+            setFileProgress(idx, 0, `retry ${attempt}/${MAX_RETRIES}…`);
+            setTimeout(() => putToS3(u,file,idx,attempt+1).then(resolve).catch(reject), delay);
+          } else {
+            const err = `S3 error ${xhr.status} after ${MAX_RETRIES} retries`;
+            logEvent('failed', { fileName: file.name, error: err, attempt, loaded: loadedMap[idx]||0, total: file.size, duration: Date.now()-uploadStartTime });
+            reject(new Error(err));
+          }
+        });
+
+        xhr.addEventListener('error', () => doRetryOrFail('Network error'));
+        xhr.addEventListener('timeout', () => doRetryOrFail('Timeout (10min)'));
+
+        function doRetryOrFail(errType) {
+          hideRetryInfo();
+          if (attempt < MAX_RETRIES) {
+            const delay = retryDelay(attempt);
+            logEvent('retry', { fileName: file.name, attempt, maxRetries: MAX_RETRIES, error: errType, loaded: loadedMap[idx]||0, total: file.size });
+            showRetryInfo(file.name, attempt, delay);
+            loadedMap[idx] = 0;
+            setFileProgress(idx, 0, `retry ${attempt}/${MAX_RETRIES}…`);
+            setTimeout(() => putToS3(u,file,idx,attempt+1).then(resolve).catch(reject), delay);
+          } else {
+            const err = `${errType} after ${MAX_RETRIES} retries`;
+            logEvent('failed', { fileName: file.name, error: err, attempt, loaded: loadedMap[idx]||0, total: file.size, duration: Date.now()-uploadStartTime });
+            reject(new Error(err));
+          }
+        }
+
+        xhr.send(file);
+      });
+    }
+
+    // ── Multipart upload (large files >= 100MB) ─────────────────
+    async function uploadMultipart(file, idx) {
+      // 1. Init multipart on server
+      const initRes = await fetch(`/api/init-multipart/${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, type: file.type || 'application/octet-stream', size: file.size })
+      });
+      if (!initRes.ok) {
+        const err = (await initRes.json()).error || 'Init failed';
+        throw new Error(err);
+      }
+      const { uploadId, key, totalParts, partSize, partUrls } = await initRes.json();
+
+      setFileDetail(idx, `0 / ${totalParts} parts · ${fmt(file.size)}`);
+
+      // 2. Upload parts with concurrency control
+      let completedParts = 0;
+      let completedBytes = 0;
+
+      // Track per-part progress for accurate overall display
+      const partLoaded = new Array(totalParts).fill(0);
+
+      function updateFileProgress() {
+        const currentLoaded = completedBytes + partLoaded.reduce((a,b) => a+b, 0);
+        loadedMap[idx] = currentLoaded;
+        const pct = Math.round(currentLoaded / file.size * 100);
+        setFileProgress(idx, pct, pct + '%');
+        setFileDetail(idx, `${completedParts}/${totalParts} parts · ${fmt(currentLoaded)} / ${fmt(file.size)}`);
+        updateOverall();
+
+        // Log milestones
+        if (pct % 10 === 0 && pct > 0) {
+          logEvent('progress', { fileName: file.name, pct, loaded: currentLoaded, total: file.size });
+        }
+      }
+
+      async function uploadPart(partNum) {
+        const start = (partNum - 1) * partSize;
+        const end = Math.min(partNum * partSize, file.size);
+        const blob = file.slice(start, end);
+        const partIdx = partNum - 1;
+        const url = partUrls[partIdx];
+
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('PUT', url);
+              xhr.timeout = 600000; // 10 min per part
+
+              xhr.upload.addEventListener('progress', e => {
+                if (!e.lengthComputable) return;
+                partLoaded[partIdx] = e.loaded;
+                updateFileProgress();
+              });
+
+              xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  partLoaded[partIdx] = 0; // will be added to completedBytes
+                  completedBytes += (end - start);
+                  completedParts++;
+                  updateFileProgress();
+                  hideRetryInfo();
+                  resolve();
+                } else {
+                  reject(new Error(`S3 HTTP ${xhr.status}`));
+                }
+              });
+
+              xhr.addEventListener('error', () => reject(new Error('Network error')));
+              xhr.addEventListener('timeout', () => reject(new Error('Timeout')));
+
+              xhr.send(blob);
+            });
+            return; // Part uploaded successfully
+          } catch (err) {
+            partLoaded[partIdx] = 0;
+            updateFileProgress();
+
+            if (attempt < MAX_RETRIES) {
+              const delay = retryDelay(attempt);
+              logEvent('retry', {
+                fileName: file.name, attempt, maxRetries: MAX_RETRIES,
+                error: err.message, partNum, loaded: completedBytes, total: file.size
+              });
+              showRetryInfo(`${file.name} part ${partNum}/${totalParts}`, attempt, delay);
+              await new Promise(r => setTimeout(r, delay));
+            } else {
+              logEvent('failed', {
+                fileName: file.name, error: err.message, attempt,
+                partNum, loaded: completedBytes, total: file.size,
+                duration: Date.now() - uploadStartTime
+              });
+              // Abort the multipart upload
+              fetch(`/api/abort-multipart/${token}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key, uploadId, reason: `Part ${partNum} failed: ${err.message}` })
+              }).catch(() => {});
+              throw new Error(`Part ${partNum} failed after ${MAX_RETRIES} retries: ${err.message}`);
+            }
+          }
+        }
+      }
+
+      // Upload parts with limited concurrency
+      const queue = Array.from({ length: totalParts }, (_, i) => i + 1);
+      const workers = [];
+
+      for (let w = 0; w < Math.min(CONCURRENT_PARTS, totalParts); w++) {
+        workers.push((async () => {
+          while (queue.length > 0) {
+            const partNum = queue.shift();
+            if (partNum) await uploadPart(partNum);
+          }
+        })());
+      }
+
+      await Promise.all(workers);
+      hideRetryInfo();
+
+      // 3. Complete multipart upload on server
+      const completeRes = await fetch(`/api/complete-multipart/${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, uploadId })
+      });
+      if (!completeRes.ok) {
+        throw new Error('Failed to finalize multipart upload');
+      }
+
+      markFileDone(idx, file.size);
+      updateOverall();
+    }
+
+    // ── Main upload handler ─────────────────────────────────────
     uploadBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       errorMsg.style.display = 'none';
+      retryInfo.style.display = 'none';
       uploadBtn.disabled = true;
       uploadBtn.textContent = 'Preparing…';
       dropzone.style.display = 'none';
       fileListEl.style.display = 'none';
 
+      uploadStartTime = Date.now();
+      totalBytes = selectedFiles.reduce((s,f) => s+f.size, 0);
+
       // Build per-file progress rows
-      uploadProgressList.innerHTML = selectedFiles.map((f, i) => `
+      uploadProgressList.innerHTML = selectedFiles.map((f, i) => {
+        const isMultipart = f.size >= MULTIPART_THRESHOLD;
+        return `
         <div class="file-progress-row" id="fpr-${i}">
           <div class="fp-bar" id="fpbar-${i}"></div>
           <div class="fp-content">
-            <span class="fp-name">${f.name}</span>
+            <span class="fp-name">${f.name}${isMultipart ? ' 🧩' : ''}</span>
             <div class="fp-right">
               <span class="fp-pct" id="fppct-${i}">0%</span>
               <span class="fp-detail" id="fpdetail-${i}">${fmt(f.size)}</span>
             </div>
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
       uploadProgressList.style.display = 'block';
       overallBarWrap.style.display = 'block';
 
-      // Prepare
-      let prepRes;
-      try {
-        const r = await fetch(`/api/prepare-upload/${token}`, {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ files: selectedFiles.map(f => ({name:f.name,type:f.type,size:f.size})) })
-        });
-        if (!r.ok) throw new Error((await r.json()).error || 'Prepare failed');
-        prepRes = await r.json();
-      } catch(e) { showError('Could not prepare upload: '+e.message); return; }
+      // Log upload started
+      logEvent('upload-started', {
+        files: selectedFiles.map(f => ({ name: f.name, size: f.size }))
+      });
 
-      const uploads = prepRes.uploads;
-      const totalBytes = selectedFiles.reduce((s,f)=>s+f.size,0);
-      const loadedMap = {};
-      const startTime = Date.now();
+      // Split files into small (direct PUT) and large (multipart)
+      const smallFiles = [];
+      const largeFiles = [];
+      selectedFiles.forEach((f, i) => {
+        if (f.size >= MULTIPART_THRESHOLD) {
+          largeFiles.push({ file: f, idx: i });
+        } else {
+          smallFiles.push({ file: f, idx: i });
+        }
+      });
 
-      function updateOverall() {
-        const totalLoaded = Object.values(loadedMap).reduce((a,b)=>a+b,0);
-        const pct = Math.round(totalLoaded/totalBytes*100);
-        overallFill.style.width = pct+'%';
-        const elapsed = (Date.now()-startTime)/1000;
-        const speed = elapsed > 0.5 ? totalLoaded/elapsed : 0;
-        const remaining = speed > 0 ? (totalBytes-totalLoaded)/speed : Infinity;
-        overallStats.textContent = speed > 0
-          ? `${fmt(totalLoaded)} / ${fmt(totalBytes)}  ·  ${fmtSpeed(speed)}  ·  ETA ${fmtEta(remaining)}`
-          : `${fmt(totalLoaded)} / ${fmt(totalBytes)}`;
-      }
-
-      function putToS3(u, file, idx, attempt=1) {
-        return new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open('PUT', u.url);
-          xhr.setRequestHeader('Content-Type', file.type||'application/octet-stream');
-
-          xhr.upload.addEventListener('progress', e => {
-            if (!e.lengthComputable) return;
-            loadedMap[idx] = e.loaded;
-            const pct = Math.round(e.loaded/file.size*100);
-            document.getElementById('fpbar-'+idx).style.width = pct+'%';
-            document.getElementById('fppct-'+idx).textContent = pct+'%';
-            const elapsed = (Date.now()-startTime)/1000;
-            const totalLoaded = Object.values(loadedMap).reduce((a,b)=>a+b,0);
-            const speed = elapsed > 0.5 ? totalLoaded/elapsed : 0;
-            const fileRemaining = speed > 0 ? (file.size-e.loaded)/speed : null;
-            document.getElementById('fpdetail-'+idx).textContent =
-              fmt(e.loaded)+' / '+fmt(file.size)+(fileRemaining!==null ? '  ·  '+fmtEta(fileRemaining) : '');
-            updateOverall();
+      // Prepare presigned URLs for small files
+      let smallUploads = [];
+      if (smallFiles.length > 0) {
+        try {
+          const r = await fetch(`/api/prepare-upload/${token}`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ files: smallFiles.map(sf => ({name:sf.file.name, type:sf.file.type, size:sf.file.size})) })
           });
-
-          xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              loadedMap[idx] = file.size;
-              document.getElementById('fpbar-'+idx).style.width = '100%';
-              document.getElementById('fpbar-'+idx).classList.add('done');
-              document.getElementById('fppct-'+idx).textContent = '✓ Done';
-              document.getElementById('fppct-'+idx).classList.add('done');
-              document.getElementById('fpdetail-'+idx).textContent = fmt(file.size);
-              updateOverall();
-              resolve();
-            } else if (xhr.status >= 500 && attempt < 5) {
-              loadedMap[idx] = 0;
-              document.getElementById('fppct-'+idx).textContent = `retry ${attempt}…`;
-              setTimeout(() => putToS3(u,file,idx,attempt+1).then(resolve).catch(reject), 2000*attempt);
-            } else {
-              reject(new Error(`S3 error ${xhr.status}`));
-            }
-          });
-          xhr.addEventListener('error', () => {
-            if (attempt < 5) {
-              loadedMap[idx] = 0;
-              document.getElementById('fppct-'+idx).textContent = `retry ${attempt}…`;
-              setTimeout(() => putToS3(u,file,idx,attempt+1).then(resolve).catch(reject), 2000*attempt);
-            } else {
-              reject(new Error('Network error after 5 retries'));
-            }
-          });
-          xhr.send(file);
-        });
+          if (!r.ok) throw new Error((await r.json()).error || 'Prepare failed');
+          const prepRes = await r.json();
+          smallUploads = prepRes.uploads.map((u, i) => ({ ...u, idx: smallFiles[i].idx, file: smallFiles[i].file }));
+        } catch(e) {
+          logEvent('failed', { fileName: 'prepare', error: e.message, duration: Date.now()-uploadStartTime });
+          showError('Could not prepare upload: '+e.message);
+          return;
+        }
       }
 
       uploadBtn.textContent = 'Uploading…';
-      try {
-        await Promise.all(uploads.map((u,i) => putToS3(u, selectedFiles.find(f=>f.name===u.name), i)));
-      } catch(e) { showError(e.message); return; }
 
-      // All done — finish bar
+      try {
+        // Upload small files (direct PUT, all in parallel)
+        const smallPromises = smallUploads.map(u => putToS3(u, u.file, u.idx));
+
+        // Upload large files (multipart, sequential per file but concurrent parts within)
+        const largePromises = largeFiles.map(({ file, idx }) => uploadMultipart(file, idx));
+
+        await Promise.all([...smallPromises, ...largePromises]);
+      } catch(e) {
+        markFileError(e.fileIdx || 0, e.message);
+        showError(e.message);
+        return;
+      }
+
+      // All done
       overallFill.style.width = '100%';
       overallFill.classList.add('done');
       overallLabel.textContent = 'Finishing…';
