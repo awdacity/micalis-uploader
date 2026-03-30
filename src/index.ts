@@ -2,6 +2,9 @@ import express from "express";
 import path from "path";
 import session from "express-session";
 import passport from "passport";
+// @ts-ignore — no type declarations available
+import SqliteStore from "better-sqlite3-session-store";
+import db from "./db";
 import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/upload";
 import authRoutes from "./routes/auth";
@@ -13,9 +16,11 @@ const port = parseInt(process.env.PORT || "3000", 10);
 app.set("trust proxy", 1); // trust Traefik
 app.use(express.json());
 
-// Session
+// Session (SQLite-backed — no MemoryStore warning)
+const BetterSqlite3Store = SqliteStore(session);
 app.use(
   session({
+    store: new BetterSqlite3Store({ client: db, expired: { clear: true, intervalMs: 3600000 } }),
     secret: process.env.SESSION_SECRET || "dev-secret",
     resave: false,
     saveUninitialized: false,
